@@ -1,0 +1,10 @@
+pycache/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+scraped_articles/
+.streamlit/
+.python-version
+pyproject.toml
+uv.lock
