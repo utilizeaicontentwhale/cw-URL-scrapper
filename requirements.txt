@@ -1,4 +1,4 @@
 streamlit
-crawl4ai
-playwright
+httpx
 beautifulsoup4
+crawl4ai
