@@ -1,22 +1,27 @@
 import os
-# Required for Streamlit Cloud deployment to ensure browser binaries are present
-os.system("playwright install chromium")
-
 import streamlit as st
 import asyncio
 import sys
 import re
+import datetime
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.utils import CustomHTML2Text
 from pathlib import Path
 
+# --- DEPLOYMENT PRE-FLIGHT ---
+# Ensures browser binaries are present on Streamlit Cloud
+if 'browser_installed' not in st.session_state:
+    with st.spinner("Initializing environment (this may take a minute)..."):
+        os.system("playwright install chromium")
+    st.session_state['browser_installed'] = True
+
 # --- CROSS-PLATFORM ASYNCIO FIX ---
-# Proactor is required for Playwright on Windows, but doesn't exist on Linux.
 IS_WINDOWS = sys.platform == 'win32'
 
 if IS_WINDOWS:
     try:
+        # Windows requires Proactor for Playwright pipes
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     except AttributeError:
         pass
@@ -56,11 +61,11 @@ def cleanup_html(html_content):
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # 1. Extract Title: h1#blogTitle
+        # 1. Extract Title
         title_tag = soup.find('h1', id='blogTitle')
         article_title = title_tag.get_text(strip=True) if title_tag else "Untitled"
         
-        # 2. Extract Content: div#article-content-block
+        # 2. Extract Content
         article_container = soup.find('div', id='article-content-block')
         if not article_container:
             return None, article_title
@@ -124,32 +129,22 @@ async def scrape_url(url, crawler):
 def main():
     st.set_page_config(page_title="Poonawalla Scraper", page_icon="📝", layout="wide")
     
-    # Ensure local directory exists immediately on start
     if not BASE_DATA_DIR.exists():
         BASE_DATA_DIR.mkdir(parents=True)
-        st.info(f"Created data directory: `{BASE_DATA_DIR}`")
 
     st.title("📝 Poonawalla Fincorp Scraper Tool")
 
-    # Sidebar Info
     with st.sidebar:
         st.header("Storage Info")
-        st.write(f"📁 **Root Folder:** `{BASE_DATA_DIR.absolute()}`")
-        st.write(f"📄 **Articles Subfolder:** `{CRAWLER_NAME}`")
-        if st.button("Clear Cache/Refresh"):
+        st.write(f"📁 **Data Path:** `{BASE_DATA_DIR.absolute()}`")
+        if st.button("Refresh App State"):
             st.rerun()
 
-    # Tab Setup
-    tab_scrape, tab_gallery = st.tabs(["🚀 Scrape Articles", "📚 Scraped Files Gallery"])
+    tab_scrape, tab_gallery = st.tabs(["🚀 Scrape Articles", "📚 Gallery"])
 
-    # --- TAB 1: SCRAPING LOGIC ---
     with tab_scrape:
-        st.markdown("### Start a New Scraping Job")
-        url_input = st.text_area(
-            "Paste URLs from `poonawallafincorp.com` here (one per line):", 
-            height=200, 
-            placeholder="https://poonawallafincorp.com/blogs/..."
-        )
+        st.markdown("### Start Scraping")
+        url_input = st.text_area("Paste URLs (one per line):", height=150)
 
         if st.button("Run Scraper", type="primary"):
             urls = [u.strip() for u in url_input.split('\n') if u.strip()]
@@ -160,103 +155,67 @@ def main():
             else:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                results_list = []
-
+                
                 async def run_scraping():
                     async with AsyncWebCrawler() as crawler:
+                        scraped_count = 0
                         for i, url in enumerate(valid_urls):
-                            status_text.text(f"Processing ({i+1}/{len(valid_urls)}): {url}")
+                            status_text.text(f"Scraping ({i+1}/{len(valid_urls)}): {url}")
                             md_content, title = await scrape_url(url, crawler)
                             
                             if md_content:
                                 safe_title = slugify(title)
                                 filename = f"poonawalla_{safe_title}.md"
                                 md_filepath = OUTPUT_DIR / filename
-                                full_md_content = f"**Source:** {url}\n\n{md_content}"
-                                
-                                # Save locally (persistent)
                                 with open(md_filepath, 'w', encoding='utf-8') as f:
-                                    f.write(full_md_content)
-                                
-                                results_list.append({"title": title, "url": url})
+                                    f.write(f"**Source:** {url}\n\n{md_content}")
+                                scraped_count += 1
                             
                             progress_bar.progress((i + 1) / len(valid_urls))
-                        return results_list
+                        return scraped_count
 
-                # Initialize loop as None to prevent UnboundLocalError
-                loop = None
+                # Logic to handle loop without Proactor error on Linux
                 try:
                     if IS_WINDOWS:
-                        # Windows requires Proactor loop for Playwright
+                        # Use Proactor specifically for Windows
                         loop = asyncio.ProactorEventLoop()
                         asyncio.set_event_loop(loop)
-                        scraped_data = loop.run_until_complete(run_scraping())
+                        count = loop.run_until_complete(run_scraping())
+                        loop.close()
                     else:
-                        # Linux (Streamlit Cloud) works with standard run() or default loop
-                        try:
-                            # Try running with the current loop if it exists
-                            scraped_data = asyncio.run(run_scraping())
-                        except RuntimeError:
-                            # Fallback if a loop is already running in the background
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            scraped_data = loop.run_until_complete(run_scraping())
+                        # Linux handles it via standard asyncio.run()
+                        count = asyncio.run(run_scraping())
                     
-                    status_text.success(f"Successfully processed {len(scraped_data)} articles! Go to the 'Gallery' tab to download them.")
+                    status_text.success(f"Processed {count} articles! See 'Gallery' tab.")
                 except Exception as e:
                     st.error(f"Scraping error: {e}")
-                finally:
-                    # Only close if we manually created/assigned a loop
-                    if loop and not loop.is_closed():
-                        loop.close()
 
-    # --- TAB 2: GALLERY / FILE EXPLORER ---
     with tab_gallery:
-        st.markdown("### Persistent Scraped Data")
-        st.markdown("Files listed here are stored in your local folder and remain accessible across refreshes.")
-        
-        # Get list of .md files in the specific output directory
+        st.markdown("### Saved Files")
         if OUTPUT_DIR.exists():
             files = sorted([f for f in OUTPUT_DIR.iterdir() if f.suffix == '.md'], key=os.path.getmtime, reverse=True)
-            
             if not files:
-                st.info("No files found yet. Run a scraping job to populate this gallery.")
+                st.info("No files found.")
             else:
-                st.write(f"Found {len(files)} markdown files.")
-                
-                # Create a simple table header
-                cols = st.columns([4, 2, 2])
-                cols[0].write("**File Name**")
-                cols[1].write("**Created At**")
-                cols[2].write("**Action**")
-                st.divider()
-
                 for f_path in files:
                     row_cols = st.columns([4, 2, 2])
-                    
-                    # Display filename
                     row_cols[0].text(f_path.name)
                     
-                    # Display timestamp
+                    # Timestamp
                     mtime = os.path.getmtime(f_path)
-                    import datetime
                     dt = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
                     row_cols[1].text(dt)
                     
-                    # Read content for the download button
                     with open(f_path, "r", encoding="utf-8") as f_obj:
                         file_data = f_obj.read()
                     
-                    # Download button
                     row_cols[2].download_button(
                         label="Download",
                         data=file_data,
                         file_name=f_path.name,
                         mime="text/markdown",
-                        key=f"dl_{f_path.stem}"
+                        key=f"dl_{f_path.name}"
                     )
-        else:
-            st.warning("Output directory does not exist.")
 
 if __name__ == "__main__":
     main()
