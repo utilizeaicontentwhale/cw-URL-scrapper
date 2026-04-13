@@ -11,12 +11,12 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.utils import CustomHTML2Text
 from pathlib import Path
 
-# --- CROSS-PLATFORM ASYNCIO FIX ---
-# Proactor is required for Playwright on Windows, but doesn't exist on Linux.
-IS_WINDOWS = sys.platform == 'win32'
+# # --- CROSS-PLATFORM ASYNCIO FIX ---
+# # Proactor is required for Playwright on Windows, but doesn't exist on Linux.
+# IS_WINDOWS = sys.platform == 'win32'
 
-if IS_WINDOWS:
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+# if IS_WINDOWS:
+#     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 # --- Configuration ---
 CRAWLER_NAME = "poonawalla_fincorp"
