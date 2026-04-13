@@ -1,3 +1,5 @@
 streamlit
 httpx
 beautifulsoup4
+markdown
+html2text
