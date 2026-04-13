@@ -1,4 +1,11 @@
 import os
+# Ensures browser binaries are present on Streamlit Cloud.
+# Only run this once to avoid slowing down the UI.
+if 'browser_installed' not in st.session_state:
+    with st.spinner("Initializing browser environment..."):
+        os.system("playwright install chromium")
+    st.session_state['browser_installed'] = True
+
 import streamlit as st
 import asyncio
 import sys
@@ -9,19 +16,11 @@ from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.utils import CustomHTML2Text
 from pathlib import Path
 
-# --- DEPLOYMENT PRE-FLIGHT ---
-# Ensures browser binaries are present on Streamlit Cloud
-if 'browser_installed' not in st.session_state:
-    with st.spinner("Initializing environment (this may take a minute)..."):
-        os.system("playwright install chromium")
-    st.session_state['browser_installed'] = True
-
 # --- CROSS-PLATFORM ASYNCIO FIX ---
 IS_WINDOWS = sys.platform == 'win32'
 
 if IS_WINDOWS:
     try:
-        # Windows requires Proactor for Playwright pipes
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     except AttributeError:
         pass
@@ -174,14 +173,13 @@ def main():
                             progress_bar.progress((i + 1) / len(valid_urls))
                         return scraped_count
 
-                # Logic to handle loop without Proactor error on Linux
+                # Initialize loop to None to prevent UnboundLocalError
+                loop = None
                 try:
                     if IS_WINDOWS:
-                        # Use Proactor specifically for Windows
                         loop = asyncio.ProactorEventLoop()
                         asyncio.set_event_loop(loop)
                         count = loop.run_until_complete(run_scraping())
-                        loop.close()
                     else:
                         # Linux handles it via standard asyncio.run()
                         count = asyncio.run(run_scraping())
@@ -189,6 +187,10 @@ def main():
                     status_text.success(f"Processed {count} articles! See 'Gallery' tab.")
                 except Exception as e:
                     st.error(f"Scraping error: {e}")
+                finally:
+                    # Only close if we manually created the loop
+                    if loop and not loop.is_closed():
+                        loop.close()
 
     with tab_gallery:
         st.markdown("### Saved Files")
