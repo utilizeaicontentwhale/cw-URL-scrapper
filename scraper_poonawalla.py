@@ -1,26 +1,28 @@
 import os
+# Required for Streamlit Cloud deployment to ensure browser binaries are present
 os.system("playwright install chromium")
 
 import streamlit as st
 import asyncio
 import sys
-import os
 import re
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.utils import CustomHTML2Text
 from pathlib import Path
 
-# # --- CROSS-PLATFORM ASYNCIO FIX ---
-# # Proactor is required for Playwright on Windows, but doesn't exist on Linux.
-# IS_WINDOWS = sys.platform == 'win32'
+# --- CROSS-PLATFORM ASYNCIO FIX ---
+# Proactor is required for Playwright on Windows, but doesn't exist on Linux.
+IS_WINDOWS = sys.platform == 'win32'
 
-# if IS_WINDOWS:
-#     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+if IS_WINDOWS:
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except AttributeError:
+        pass
 
 # --- Configuration ---
 CRAWLER_NAME = "poonawalla_fincorp"
-# Ensuring the base directory is clean and consistent
 BASE_DATA_DIR = Path("scraped_articles")
 OUTPUT_DIR = BASE_DATA_DIR / CRAWLER_NAME
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -181,15 +183,32 @@ def main():
                             progress_bar.progress((i + 1) / len(valid_urls))
                         return results_list
 
+                # Initialize loop as None to prevent UnboundLocalError
+                loop = None
                 try:
-                    loop = asyncio.ProactorEventLoop()
-                    asyncio.set_event_loop(loop)
-                    scraped_data = loop.run_until_complete(run_scraping())
+                    if IS_WINDOWS:
+                        # Windows requires Proactor loop for Playwright
+                        loop = asyncio.ProactorEventLoop()
+                        asyncio.set_event_loop(loop)
+                        scraped_data = loop.run_until_complete(run_scraping())
+                    else:
+                        # Linux (Streamlit Cloud) works with standard run() or default loop
+                        try:
+                            # Try running with the current loop if it exists
+                            scraped_data = asyncio.run(run_scraping())
+                        except RuntimeError:
+                            # Fallback if a loop is already running in the background
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            scraped_data = loop.run_until_complete(run_scraping())
+                    
                     status_text.success(f"Successfully processed {len(scraped_data)} articles! Go to the 'Gallery' tab to download them.")
                 except Exception as e:
                     st.error(f"Scraping error: {e}")
                 finally:
-                    loop.close()
+                    # Only close if we manually created/assigned a loop
+                    if loop and not loop.is_closed():
+                        loop.close()
 
     # --- TAB 2: GALLERY / FILE EXPLORER ---
     with tab_gallery:
@@ -228,8 +247,7 @@ def main():
                     with open(f_path, "r", encoding="utf-8") as f_obj:
                         file_data = f_obj.read()
                     
-                    # Download button - setting on_click="ignore" to prevent refresh if desired, 
-                    # but usually unnecessary with tab-based file reading.
+                    # Download button
                     row_cols[2].download_button(
                         label="Download",
                         data=file_data,
