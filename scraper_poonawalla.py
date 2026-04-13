@@ -4,7 +4,6 @@ import sys
 import os
 import re
 import datetime
-import markdown
 import html2text
 from bs4 import BeautifulSoup
 from pathlib import Path
@@ -61,7 +60,7 @@ def cleanup_html(html_content):
         return None, "Untitled"
 
 def convert_to_markdown(html_content):
-    """Convert cleaned HTML to Markdown using html2text."""
+    """Convert cleaned HTML to Markdown using html2text (for preview only)."""
     h = html2text.HTML2Text()
     h.ignore_links = False
     h.heading_style = "ATX"
@@ -70,9 +69,8 @@ def convert_to_markdown(html_content):
         markdown_content = f"# {markdown_content.lstrip()}"
     return markdown_content
 
-def markdown_to_html(md_content, title):
-    """Wrap converted markdown in a styled HTML boilerplate."""
-    body_html = markdown.markdown(md_content)
+def wrap_html_content(raw_html, title):
+    """Wrap raw scraped HTML in a styled HTML boilerplate."""
     full_html = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -100,24 +98,25 @@ def markdown_to_html(md_content, title):
         </style>
     </head>
     <body>
-        {body_html}
+        {raw_html}
     </body>
     </html>
     """
     return full_html
 
 def scrape_url_lightweight(url):
-    """Fetch content using HTTP GET (No browser required)."""
+    """Fetch content using HTTP GET (No browser required). Returns MD and HTML."""
     try:
         with httpx.Client(headers=HEADERS, timeout=30.0, follow_redirects=True) as client:
             response = client.get(url)
             if response.status_code == 200:
-                html, title = cleanup_html(response.text)
-                if html:
-                    return convert_to_markdown(html), title
+                html_content, title = cleanup_html(response.text)
+                if html_content:
+                    md_content = convert_to_markdown(html_content)
+                    return md_content, html_content, title
     except Exception as e:
         print(f"Error scraping {url}: {e}")
-    return None, "Untitled"
+    return None, None, "Untitled"
 
 def toggle_preview(key):
     """Callback to toggle the preview state of a specific file."""
@@ -147,12 +146,20 @@ def main():
                 
                 for i, url in enumerate(urls):
                     status.text(f"Scraping ({i+1}/{len(urls)}): {url}")
-                    md, title = scrape_url_lightweight(url)
+                    md, raw_html, title = scrape_url_lightweight(url)
                     
-                    if md:
-                        filename = f"poonawalla_{slugify(title)}.md"
-                        with open(OUTPUT_DIR / filename, 'w', encoding='utf-8') as f:
+                    if md and raw_html:
+                        filename_base = f"poonawalla_{slugify(title)}"
+                        
+                        # 1. Save Markdown (For Streamlit Preview)
+                        with open(OUTPUT_DIR / f"{filename_base}.md", 'w', encoding='utf-8') as f:
                             f.write(f"**Source:** {url}\n\n{md}")
+                            
+                        # 2. Save HTML (For exact styling & table preservation)
+                        styled_html = wrap_html_content(f"<p><strong>Source:</strong> <a href='{url}'>{url}</a></p>\n{raw_html}", title)
+                        with open(OUTPUT_DIR / f"{filename_base}.html", 'w', encoding='utf-8') as f:
+                            f.write(styled_html)
+                            
                         success_count += 1
                     
                     progress.progress((i + 1) / len(urls))
@@ -161,21 +168,19 @@ def main():
 
     with tab_gallery:
         if OUTPUT_DIR.exists():
+            # Scan for markdown files to list items in the gallery
             files = sorted(list(OUTPUT_DIR.glob("*.md")), key=os.path.getmtime, reverse=True)
             if not files:
                 st.info("No files found.")
             else:
-                for f_path in files:
+                for md_path in files:
                     with st.container(border=True):
                         col1, col2, col3 = st.columns([6, 2, 2])
                         
-                        col1.markdown(f"**📄 {f_path.name}**")
+                        col1.markdown(f"**📄 {md_path.stem}**")
                         
-                        with open(f_path, "r", encoding="utf-8") as f:
-                            md_data = f.read()
-                            
                         # Manage session state for preview toggle
-                        state_key = f"preview_{f_path.name}"
+                        state_key = f"preview_{md_path.name}"
                         if state_key not in st.session_state:
                             st.session_state[state_key] = False
                             
@@ -183,27 +188,32 @@ def main():
                         btn_label = "Close Preview" if st.session_state[state_key] else "Preview"
                         col2.button(
                             btn_label, 
-                            key=f"prev_btn_{f_path.name}",
+                            key=f"prev_btn_{md_path.name}",
                             on_click=toggle_preview,
                             args=(state_key,)
                         )
                         
                         # 2. Download HTML Button
-                        display_title = f_path.stem.replace("poonawalla_", "").replace("_", " ").title()
-                        html_data = markdown_to_html(md_data, display_title)
-                        
-                        col3.download_button(
-                            label="Download",
-                            data=html_data,
-                            file_name=f_path.with_suffix('.html').name,
-                            mime="text/html",
-                            key=f"dl_html_{f_path.name}"
-                        )
+                        html_path = md_path.with_suffix('.html')
+                        if html_path.exists():
+                            with open(html_path, "r", encoding="utf-8") as f:
+                                html_data = f.read()
+                                
+                            col3.download_button(
+                                label="Download",
+                                data=html_data,
+                                file_name=html_path.name,
+                                mime="text/html",
+                                key=f"dl_html_{md_path.name}"
+                            )
+                        else:
+                            col3.write("HTML file missing")
                         
                         # Show the preview window when the state is True
                         if st.session_state[state_key]:
                             st.divider()
-                            st.markdown(md_data)
+                            with open(md_path, "r", encoding="utf-8") as f:
+                                st.markdown(f.read())
 
 if __name__ == "__main__":
     main()
