@@ -1,3 +1,4 @@
+import streamlit as st
 import os
 # Ensures browser binaries are present on Streamlit Cloud.
 # Only run this once to avoid slowing down the UI.
@@ -6,7 +7,6 @@ if 'browser_installed' not in st.session_state:
         os.system("playwright install chromium")
     st.session_state['browser_installed'] = True
 
-import streamlit as st
 import asyncio
 import sys
 import re
