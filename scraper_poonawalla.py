@@ -28,34 +28,67 @@ def slugify(text):
     text = re.sub(r'[-\s]+', '_', text).strip('_')
     return text
 
-def cleanup_html(html_content):
-    """Clean HTML using selectors for blogTitle and article-content-block."""
+def cleanup_html(html_content, url):
+    """Clean HTML using selectors based on URL type."""
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # 1. Extract Title: h1#blogTitle
-        title_tag = soup.find('h1', id='blogTitle')
-        article_title = title_tag.get_text(strip=True) if title_tag else "Untitled"
-        
-        # 2. Extract Content: div#article-content-block
-        article_container = soup.find('div', id='article-content-block')
-        if not article_container:
-            return None, article_title
-        
-        # 3. Cleanup Unwanted Elements
-        for tag in article_container.find_all(['img', 'script', 'style']):
-            tag.decompose()
-        for unwanted in article_container.find_all('div', class_='article-toc_right authArticleBox'):
-            unwanted.decompose()
-        
-        # 4. Structure Output
-        output_soup = BeautifulSoup('', 'html.parser')
-        h1 = output_soup.new_tag('h1')
-        h1.string = article_title
-        output_soup.append(h1)
-        output_soup.append(article_container)
-        
-        return str(output_soup), article_title
+        # 1. Check if it's a blog page via URL
+        if '/blogs/' in url.lower():
+            # --- BLOG PAGE LOGIC ---
+            title_tag = soup.find('h1', id='blogTitle')
+            article_title = title_tag.get_text(strip=True) if title_tag else "Untitled Blog"
+            
+            article_container = soup.find('div', id='article-content-block')
+            if not article_container:
+                return None, article_title
+            
+            # Cleanup Unwanted Elements
+            for tag in article_container.find_all(['img', 'script', 'style']):
+                tag.decompose()
+            for unwanted in article_container.find_all('div', class_='article-toc_right authArticleBox'):
+                unwanted.decompose()
+            
+            # Structure Output
+            output_soup = BeautifulSoup('', 'html.parser')
+            h1 = output_soup.new_tag('h1')
+            h1.string = article_title
+            output_soup.append(h1)
+            output_soup.append(article_container)
+            
+            return str(output_soup), article_title
+            
+        else:
+            # --- REGULAR WEBPAGE LOGIC ---
+            # Fallback title
+            page_title_tag = soup.find('title')
+            article_title = page_title_tag.get_text(strip=True) if page_title_tag else "Untitled Webpage"
+            
+            # Grab main-content
+            main_content = soup.find('div', id='main-content')
+            if not main_content:
+                return None, article_title
+                
+            # Cleanup images and footer
+            for tag in main_content.find_all('img'):
+                tag.decompose()
+            for tag in main_content.find_all('footer'):
+                tag.decompose()
+            for tag in main_content.find_all('header'):
+                tag.decompose()
+            # Additional safety cleanup
+            for tag in main_content.find_all(['script', 'style']):
+                tag.decompose()
+                
+            # Structure Output
+            output_soup = BeautifulSoup('', 'html.parser')
+            h1 = output_soup.new_tag('h1')
+            h1.string = article_title
+            output_soup.append(h1)
+            output_soup.append(main_content)
+            
+            return str(output_soup), article_title
+
     except:
         return None, "Untitled"
 
@@ -69,54 +102,19 @@ def convert_to_markdown(html_content):
         markdown_content = f"# {markdown_content.lstrip()}"
     return markdown_content
 
-def wrap_html_content(raw_html, title):
-    """Wrap raw scraped HTML in a styled HTML boilerplate."""
-    full_html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title}</title>
-        <style>
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                line-height: 1.6;
-                color: #333;
-                max-width: 800px;
-                margin: 0 auto;
-                padding: 2rem;
-            }}
-            h1, h2, h3 {{ color: #111; line-height: 1.25; }}
-            a {{ color: #0066cc; text-decoration: none; }}
-            a:hover {{ text-decoration: underline; }}
-            pre {{ background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }}
-            blockquote {{ border-left: 4px solid #ddd; padding-left: 1rem; color: #666; font-style: italic; }}
-            table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f8f8f8; }}
-        </style>
-    </head>
-    <body>
-        {raw_html}
-    </body>
-    </html>
-    """
-    return full_html
-
 def scrape_url_lightweight(url):
-    """Fetch content using HTTP GET (No browser required). Returns MD and HTML."""
+    """Fetch content using HTTP GET (No browser required). Returns MD."""
     try:
         with httpx.Client(headers=HEADERS, timeout=30.0, follow_redirects=True) as client:
             response = client.get(url)
             if response.status_code == 200:
-                html_content, title = cleanup_html(response.text)
+                html_content, title = cleanup_html(response.text, url)
                 if html_content:
                     md_content = convert_to_markdown(html_content)
-                    return md_content, html_content, title
+                    return md_content, title
     except Exception as e:
         print(f"Error scraping {url}: {e}")
-    return None, None, "Untitled"
+    return None, "Untitled"
 
 def toggle_preview(key):
     """Callback to toggle the preview state of a specific file."""
@@ -146,19 +144,14 @@ def main():
                 
                 for i, url in enumerate(urls):
                     status.text(f"Scraping ({i+1}/{len(urls)}): {url}")
-                    md, raw_html, title = scrape_url_lightweight(url)
+                    md, title = scrape_url_lightweight(url)
                     
-                    if md and raw_html:
+                    if md:
                         filename_base = f"poonawalla_{slugify(title)}"
                         
-                        # 1. Save Markdown (For Streamlit Preview)
+                        # Save Markdown
                         with open(OUTPUT_DIR / f"{filename_base}.md", 'w', encoding='utf-8') as f:
                             f.write(f"**Source:** {url}\n\n{md}")
-                            
-                        # 2. Save HTML (For exact styling & table preservation)
-                        styled_html = wrap_html_content(f"<p><strong>Source:</strong> <a href='{url}'>{url}</a></p>\n{raw_html}", title)
-                        with open(OUTPUT_DIR / f"{filename_base}.html", 'w', encoding='utf-8') as f:
-                            f.write(styled_html)
                             
                         success_count += 1
                     
@@ -193,27 +186,22 @@ def main():
                             args=(state_key,)
                         )
                         
-                        # 2. Download HTML Button
-                        html_path = md_path.with_suffix('.html')
-                        if html_path.exists():
-                            with open(html_path, "r", encoding="utf-8") as f:
-                                html_data = f.read()
-                                
-                            col3.download_button(
-                                label="Download",
-                                data=html_data,
-                                file_name=html_path.name,
-                                mime="text/html",
-                                key=f"dl_html_{md_path.name}"
-                            )
-                        else:
-                            col3.write("HTML file missing")
+                        # 2. Download Markdown Button
+                        with open(md_path, "r", encoding="utf-8") as f:
+                            md_data = f.read()
+                            
+                        col3.download_button(
+                            label="Download",
+                            data=md_data,
+                            file_name=md_path.name,
+                            mime="text/markdown",
+                            key=f"dl_md_{md_path.name}"
+                        )
                         
                         # Show the preview window when the state is True
                         if st.session_state[state_key]:
                             st.divider()
-                            with open(md_path, "r", encoding="utf-8") as f:
-                                st.markdown(f.read())
+                            st.markdown(md_data)
 
 if __name__ == "__main__":
     main()
