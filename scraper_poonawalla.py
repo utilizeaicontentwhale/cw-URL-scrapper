@@ -95,7 +95,7 @@ def cleanup_html(html_content, url):
 def convert_to_markdown(html_content):
     """Convert cleaned HTML to Markdown using html2text (for preview only)."""
     h = html2text.HTML2Text()
-    h.ignore_links = False
+    h.ignore_links = True
     h.heading_style = "ATX"
     markdown_content = h.handle(html_content)
     if markdown_content and not markdown_content.strip().startswith("#"):
